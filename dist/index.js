@@ -578,7 +578,22 @@ const syncRepo = async (octokit, plan, options) => {
             logger.info(`[DRY RUN] Would create PR for ${repoFullName}`);
             return { repoFullName, status: 'skipped', changes };
         }
+        const existingPR = await (0, pull_request_1.findExistingPR)(octokit, owner, repo, constants_1.BRANCH_NAME);
         const existingBranchSha = await (0, branch_1.getBranchSha)(octokit, owner, repo, constants_1.BRANCH_NAME);
+        // If sync branch exists, compare against it to avoid redundant commits
+        if (existingBranchSha && existingPR) {
+            const branchContents = await fetchTargetContents(octokit, owner, repo, files.map((f) => f.dest), constants_1.BRANCH_NAME);
+            const branchChanges = (0, differ_1.computeFileChanges)(files, sourceContents, branchContents);
+            if (!(0, differ_1.hasChanges)(branchChanges)) {
+                logger.info(`Sync branch already up to date for ${repoFullName}`);
+                return {
+                    repoFullName,
+                    status: 'skipped',
+                    pr: existingPR,
+                    changes: branchChanges,
+                };
+            }
+        }
         if (!existingBranchSha) {
             await (0, branch_1.createBranch)(octokit, owner, repo, constants_1.BRANCH_NAME, baseSha);
         }
@@ -597,7 +612,6 @@ const syncRepo = async (octokit, plan, options) => {
         await (0, branch_1.updateBranchRef)(octokit, owner, repo, constants_1.BRANCH_NAME, commitSha);
         const prBody = buildPRBody(options, changes);
         const prTitle = `${options.prTitlePrefix} ${options.sourceRepo}`;
-        const existingPR = await (0, pull_request_1.findExistingPR)(octokit, owner, repo, constants_1.BRANCH_NAME);
         const pr = existingPR
             ? await (0, pull_request_1.updatePR)(octokit, owner, repo, existingPR.number, prTitle, prBody)
             : await (0, pull_request_1.createPR)(octokit, owner, repo, prTitle, prBody, constants_1.BRANCH_NAME, defaultBranch);

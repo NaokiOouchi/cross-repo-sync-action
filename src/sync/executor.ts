@@ -54,7 +54,30 @@ export const syncRepo = async (
       return { repoFullName, status: 'skipped', changes }
     }
 
+    const existingPR = await findExistingPR(octokit, owner, repo, BRANCH_NAME)
     const existingBranchSha = await getBranchSha(octokit, owner, repo, BRANCH_NAME)
+
+    // If sync branch exists, compare against it to avoid redundant commits
+    if (existingBranchSha && existingPR) {
+      const branchContents = await fetchTargetContents(
+        octokit,
+        owner,
+        repo,
+        files.map((f) => f.dest),
+        BRANCH_NAME
+      )
+      const branchChanges = computeFileChanges(files, sourceContents, branchContents)
+      if (!hasChanges(branchChanges)) {
+        logger.info(`Sync branch already up to date for ${repoFullName}`)
+        return {
+          repoFullName,
+          status: 'skipped',
+          pr: existingPR,
+          changes: branchChanges,
+        }
+      }
+    }
+
     if (!existingBranchSha) {
       await createBranch(octokit, owner, repo, BRANCH_NAME, baseSha)
     } else {
@@ -76,7 +99,6 @@ export const syncRepo = async (
     const prBody = buildPRBody(options, changes)
     const prTitle = `${options.prTitlePrefix} ${options.sourceRepo}`
 
-    const existingPR = await findExistingPR(octokit, owner, repo, BRANCH_NAME)
     const pr = existingPR
       ? await updatePR(octokit, owner, repo, existingPR.number, prTitle, prBody)
       : await createPR(octokit, owner, repo, prTitle, prBody, BRANCH_NAME, defaultBranch)
