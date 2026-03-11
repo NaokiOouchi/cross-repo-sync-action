@@ -1,0 +1,11 @@
+sync:
+  - src: rules/coding-style.md
+    dest: .github/copilot-instructions.md
+    repos:
+      - org/repo-a
+      - org/repo-b
+
+  - src: rules/security.md
+    dest: .cursor/rules/security.md
+    repos:
+      - org/repo-a

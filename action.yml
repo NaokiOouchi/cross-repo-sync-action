@@ -1,0 +1,38 @@
+name: 'Cross Repo Sync'
+description: 'Sync files from this repository to multiple target repositories via pull requests'
+author: 'PokoTech'
+
+branding:
+  icon: 'refresh-cw'
+  color: 'blue'
+
+inputs:
+  token:
+    description: 'GitHub token with write access to target repositories (PAT recommended)'
+    required: true
+  config-path:
+    description: 'Path to sync configuration file'
+    required: false
+    default: 'sync-config.yml'
+  dry-run:
+    description: 'If true, only log what would be done without making changes'
+    required: false
+    default: 'false'
+  pr-title-prefix:
+    description: 'Prefix for pull request titles'
+    required: false
+    default: 'chore: sync files from'
+  commit-message-prefix:
+    description: 'Prefix for commit messages'
+    required: false
+    default: 'chore: sync files from'
+
+outputs:
+  pr-urls:
+    description: 'JSON array of created/updated PR URLs'
+  repos-synced:
+    description: 'Number of repositories that were synced'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

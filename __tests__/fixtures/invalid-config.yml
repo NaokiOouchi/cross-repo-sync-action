@@ -1,0 +1,4 @@
+sync:
+  - src: rules/coding-style.md
+    dest: .github/copilot-instructions.md
+    repos: []

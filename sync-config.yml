@@ -1,0 +1,11 @@
+sync:
+  - src: rules/coding-style.md
+    dest: .github/copilot-instructions.md
+    repos:
+      - NaokiOouchi/test-sync-target-a
+      - NaokiOouchi/test-sync-target-b
+
+  - src: rules/security.md
+    dest: .github/security.md
+    repos:
+      - NaokiOouchi/test-sync-target-a
