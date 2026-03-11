@@ -94,7 +94,11 @@ sync:
     dest: path/in/target/repo    # Destination path in target repos
     repos:                       # List of target repositories
       - owner/repo-name
+    delete: false                # (optional) Delete files in dest not in src
 ```
+
+- `src` ending with `/` is treated as a directory (all files synced recursively)
+- `delete: true` removes files in the target directory that don't exist in the source
 
 ## Examples
 
@@ -133,6 +137,30 @@ sync:
       - my-org/backend
 ```
 
+### Sync an entire directory
+
+```yaml
+sync:
+  - src: configs/
+    dest: .github/configs/
+    repos:
+      - my-org/frontend
+      - my-org/backend
+```
+
+### Sync a directory and remove orphaned files
+
+```yaml
+sync:
+  - src: configs/
+    dest: .github/configs/
+    delete: true
+    repos:
+      - my-org/frontend
+```
+
+Files in `.github/configs/` on the target that don't exist in `configs/` will be deleted.
+
 ### Dry run
 
 ```yaml
@@ -140,6 +168,44 @@ sync:
   with:
     token: ${{ secrets.PAT }}
     dry-run: 'true'
+```
+
+## Authentication
+
+### Personal Access Token (PAT)
+
+The simplest setup. See [Quick Start](#3-set-up-a-pat) above.
+
+PRs will be created as **your user account**.
+
+### GitHub App (recommended for teams)
+
+Using a GitHub App, PRs appear as a bot account (e.g., `my-sync-bot[bot]`).
+
+1. [Create a GitHub App](https://github.com/settings/apps/new):
+   - **Permissions**: Contents (Read & write), Pull requests (Read & write)
+   - **Where can this app be installed?**: Only on this account
+2. Install the app on your target repositories
+3. Use [actions/create-github-app-token](https://github.com/actions/create-github-app-token) in your workflow:
+
+```yaml
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: your-org
+          repositories: 'repo-a,repo-b'
+
+      - uses: NaokiOouchi/cross-repo-sync-action@v1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
 ```
 
 ## License

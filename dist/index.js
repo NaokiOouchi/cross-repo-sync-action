@@ -40,10 +40,11 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.buildRepoSyncPlans = exports.parseConfigFile = void 0;
+exports.getDirectoryDestPaths = exports.expandDirectoryMappings = exports.buildRepoSyncPlans = exports.parseConfigFile = void 0;
 const fs = __importStar(__nccwpck_require__(1943));
 const yaml = __importStar(__nccwpck_require__(4281));
 const schema_1 = __nccwpck_require__(2604);
+const files_1 = __nccwpck_require__(8305);
 const parseConfigFile = async (filePath) => {
     const content = await fs.readFile(filePath, 'utf-8');
     const raw = yaml.load(content);
@@ -57,7 +58,7 @@ const buildRepoSyncPlans = (config) => {
             const existing = repoMap.get(repoFullName) ?? [];
             repoMap.set(repoFullName, [
                 ...existing,
-                { src: mapping.src, dest: mapping.dest },
+                { src: mapping.src, dest: mapping.dest, delete: mapping.delete },
             ]);
         }
     }
@@ -67,6 +68,17 @@ const buildRepoSyncPlans = (config) => {
     });
 };
 exports.buildRepoSyncPlans = buildRepoSyncPlans;
+const expandDirectoryMappings = async (files) => {
+    const expanded = await Promise.all(files.map((f) => (0, files_1.expandDirectoryMapping)(f.src, f.dest, f.delete)));
+    return expanded.flat();
+};
+exports.expandDirectoryMappings = expandDirectoryMappings;
+const getDirectoryDestPaths = (files) => {
+    return files
+        .filter((f) => (0, files_1.isDirectoryPath)(f.src))
+        .map((f) => f.dest);
+};
+exports.getDirectoryDestPaths = getDirectoryDestPaths;
 //# sourceMappingURL=parser.js.map
 
 /***/ }),
@@ -87,6 +99,7 @@ const fileMappingSchema = zod_1.z.object({
         .string()
         .regex(/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/, 'repo must be in "owner/repo" format'))
         .min(1, 'repos must have at least one entry'),
+    delete: zod_1.z.boolean().optional(),
 });
 exports.fileMappingSchema = fileMappingSchema;
 const syncConfigSchema = zod_1.z.object({
@@ -177,7 +190,7 @@ exports.createGitHubClient = createGitHubClient;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createCommit = exports.createTreeWithFiles = exports.getFileContent = void 0;
+exports.listDirectoryFiles = exports.createCommit = exports.createTreeWithFiles = exports.getFileContent = void 0;
 const getFileContent = async (octokit, owner, repo, path, ref) => {
     try {
         const { data } = await octokit.repos.getContent({
@@ -207,7 +220,9 @@ const createTreeWithFiles = async (octokit, owner, repo, baseTreeSha, files) => 
         path: f.dest,
         mode: '100644',
         type: 'blob',
-        content: f.content,
+        ...(f.status === 'deleted'
+            ? { sha: null }
+            : { content: f.content }),
     }));
     const { data } = await octokit.git.createTree({
         owner,
@@ -229,6 +244,40 @@ const createCommit = async (octokit, owner, repo, message, treeSha, parentSha) =
     return data.sha;
 };
 exports.createCommit = createCommit;
+const listDirectoryFiles = async (octokit, owner, repo, dirPath, ref) => {
+    try {
+        return await listDirectoryFilesRecursively(octokit, owner, repo, dirPath, ref);
+    }
+    catch (err) {
+        if (isNotFoundError(err)) {
+            return [];
+        }
+        throw err;
+    }
+};
+exports.listDirectoryFiles = listDirectoryFiles;
+const listDirectoryFilesRecursively = async (octokit, owner, repo, dirPath, ref) => {
+    const { data } = await octokit.repos.getContent({
+        owner,
+        repo,
+        path: dirPath,
+        ref,
+    });
+    if (!Array.isArray(data)) {
+        return [dirPath];
+    }
+    const results = [];
+    for (const item of data) {
+        if (item.type === 'dir') {
+            const nested = await listDirectoryFilesRecursively(octokit, owner, repo, item.path, ref);
+            results.push(...nested);
+        }
+        else {
+            results.push(item.path);
+        }
+    }
+    return results.sort();
+};
 const isNotFoundError = (err) => {
     return (typeof err === 'object' &&
         err !== null &&
@@ -485,7 +534,7 @@ const logSummary = (results) => {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.hasChanges = exports.computeFileChanges = void 0;
+exports.hasChanges = exports.computeOrphanedFiles = exports.computeFileChanges = void 0;
 const computeFileChanges = (mappings, sourceContents, targetContents) => {
     return mappings.map((mapping) => {
         const source = sourceContents.get(mapping.src);
@@ -503,6 +552,19 @@ const computeFileChanges = (mappings, sourceContents, targetContents) => {
     });
 };
 exports.computeFileChanges = computeFileChanges;
+const computeOrphanedFiles = (sourceDests, targetPaths, directoryDests) => {
+    return targetPaths
+        .filter((targetPath) => {
+        const isUnderSyncedDir = directoryDests.some((dir) => targetPath.startsWith(dir));
+        return isUnderSyncedDir && !sourceDests.has(targetPath);
+    })
+        .map((targetPath) => ({
+        dest: targetPath,
+        content: '',
+        status: 'deleted',
+    }));
+};
+exports.computeOrphanedFiles = computeOrphanedFiles;
 const hasChanges = (changes) => {
     return changes.some((c) => c.status !== 'unchanged');
 };
@@ -556,19 +618,27 @@ const branch_1 = __nccwpck_require__(2952);
 const content_1 = __nccwpck_require__(3123);
 const pull_request_1 = __nccwpck_require__(6499);
 const differ_1 = __nccwpck_require__(5724);
+const parser_1 = __nccwpck_require__(336);
 const constants_1 = __nccwpck_require__(7223);
 const logger = __importStar(__nccwpck_require__(8532));
 const syncRepo = async (octokit, plan, options) => {
     const { owner, repo, repoFullName, files } = plan;
     try {
-        const sourceContents = await readSourceFiles(files.map((f) => f.src));
+        const directoryDests = (0, parser_1.getDirectoryDestPaths)(files);
+        const expandedFiles = await (0, parser_1.expandDirectoryMappings)(files);
+        const hasDeleteEnabled = files.some((f) => f.delete === true);
+        const sourceContents = await readSourceFiles(expandedFiles.map((f) => f.src));
         const defaultBranch = await (0, branch_1.getDefaultBranch)(octokit, owner, repo);
         const baseSha = await (0, branch_1.getBranchSha)(octokit, owner, repo, defaultBranch);
         if (!baseSha) {
             throw new Error(`Could not get SHA for default branch: ${defaultBranch}`);
         }
-        const targetContents = await fetchTargetContents(octokit, owner, repo, files.map((f) => f.dest), defaultBranch);
-        const changes = (0, differ_1.computeFileChanges)(files, sourceContents, targetContents);
+        const targetContents = await fetchTargetContents(octokit, owner, repo, expandedFiles.map((f) => f.dest), defaultBranch);
+        const fileChanges = (0, differ_1.computeFileChanges)(expandedFiles, sourceContents, targetContents);
+        const orphanedChanges = hasDeleteEnabled
+            ? await detectOrphanedFiles(octokit, owner, repo, expandedFiles, directoryDests, defaultBranch)
+            : [];
+        const changes = [...fileChanges, ...orphanedChanges];
         if (!(0, differ_1.hasChanges)(changes)) {
             logger.info(`No changes needed for ${repoFullName}`);
             return { repoFullName, status: 'skipped', changes };
@@ -582,8 +652,12 @@ const syncRepo = async (octokit, plan, options) => {
         const existingBranchSha = await (0, branch_1.getBranchSha)(octokit, owner, repo, constants_1.BRANCH_NAME);
         // If sync branch exists, compare against it to avoid redundant commits
         if (existingBranchSha && existingPR) {
-            const branchContents = await fetchTargetContents(octokit, owner, repo, files.map((f) => f.dest), constants_1.BRANCH_NAME);
-            const branchChanges = (0, differ_1.computeFileChanges)(files, sourceContents, branchContents);
+            const branchContents = await fetchTargetContents(octokit, owner, repo, expandedFiles.map((f) => f.dest), constants_1.BRANCH_NAME);
+            const branchFileChanges = (0, differ_1.computeFileChanges)(expandedFiles, sourceContents, branchContents);
+            const branchOrphanedChanges = hasDeleteEnabled
+                ? await detectOrphanedFiles(octokit, owner, repo, expandedFiles, directoryDests, constants_1.BRANCH_NAME)
+                : [];
+            const branchChanges = [...branchFileChanges, ...branchOrphanedChanges];
             if (!(0, differ_1.hasChanges)(branchChanges)) {
                 logger.info(`Sync branch already up to date for ${repoFullName}`);
                 return {
@@ -625,6 +699,14 @@ const syncRepo = async (octokit, plan, options) => {
     }
 };
 exports.syncRepo = syncRepo;
+const detectOrphanedFiles = async (octokit, owner, repo, expandedFiles, directoryDests, ref) => {
+    const deleteEnabledDests = expandedFiles
+        .filter((f) => f.delete === true)
+        .map((f) => f.dest);
+    const sourceDests = new Set(deleteEnabledDests);
+    const targetPaths = (await Promise.all(directoryDests.map((dir) => (0, content_1.listDirectoryFiles)(octokit, owner, repo, dir, ref)))).flat();
+    return (0, differ_1.computeOrphanedFiles)(sourceDests, targetPaths, directoryDests);
+};
 const readSourceFiles = async (paths) => {
     const entries = await Promise.all(paths.map(async (path) => {
         const content = await fs.readFile(path, 'utf-8');
@@ -696,6 +778,84 @@ exports.DEFAULT_CONFIG_PATH = 'sync-config.yml';
 exports.DEFAULT_PR_TITLE_PREFIX = 'chore: sync files from';
 exports.DEFAULT_COMMIT_MESSAGE_PREFIX = 'chore: sync files from';
 //# sourceMappingURL=constants.js.map
+
+/***/ }),
+
+/***/ 8305:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.expandDirectoryMapping = exports.isDirectoryPath = void 0;
+const fs = __importStar(__nccwpck_require__(1943));
+const path = __importStar(__nccwpck_require__(6928));
+const isDirectoryPath = (filePath) => filePath.endsWith('/');
+exports.isDirectoryPath = isDirectoryPath;
+const expandDirectoryMapping = async (src, dest, deleteOrphans) => {
+    if (!(0, exports.isDirectoryPath)(src)) {
+        return [{ src, dest, delete: deleteOrphans }];
+    }
+    const files = await listFilesRecursively(src);
+    return files.map((file) => {
+        const relativePath = path.relative(src, file);
+        return {
+            src: file,
+            dest: path.join(dest, relativePath),
+            delete: deleteOrphans,
+        };
+    });
+};
+exports.expandDirectoryMapping = expandDirectoryMapping;
+const listFilesRecursively = async (dir) => {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const results = [];
+    for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            const nested = await listFilesRecursively(fullPath);
+            results.push(...nested);
+        }
+        else {
+            results.push(fullPath);
+        }
+    }
+    return results.sort();
+};
+//# sourceMappingURL=files.js.map
 
 /***/ }),
 

@@ -25,6 +25,25 @@ export const computeFileChanges = (
   })
 }
 
+export const computeOrphanedFiles = (
+  sourceDests: ReadonlySet<string>,
+  targetPaths: readonly string[],
+  directoryDests: readonly string[]
+): readonly FileChange[] => {
+  return targetPaths
+    .filter((targetPath) => {
+      const isUnderSyncedDir = directoryDests.some((dir) =>
+        targetPath.startsWith(dir)
+      )
+      return isUnderSyncedDir && !sourceDests.has(targetPath)
+    })
+    .map((targetPath) => ({
+      dest: targetPath,
+      content: '',
+      status: 'deleted' as const,
+    }))
+}
+
 export const hasChanges = (changes: readonly FileChange[]): boolean => {
   return changes.some((c) => c.status !== 'unchanged')
 }

@@ -1,10 +1,11 @@
 import * as fs from 'fs/promises'
 import type { Octokit } from '@octokit/rest'
-import type { RepoSyncPlan, SyncResult } from '../types'
+import type { RepoSyncPlan, RepoFileMapping, FileChange, SyncResult } from '../types'
 import { getDefaultBranch, getBranchSha, createBranch, updateBranchRef } from '../github/branch'
-import { getFileContent, createTreeWithFiles, createCommit } from '../github/content'
+import { getFileContent, createTreeWithFiles, createCommit, listDirectoryFiles } from '../github/content'
 import { findExistingPR, createPR, updatePR } from '../github/pull-request'
-import { computeFileChanges, hasChanges } from './differ'
+import { computeFileChanges, computeOrphanedFiles, hasChanges } from './differ'
+import { expandDirectoryMappings, getDirectoryDestPaths } from '../config/parser'
 import { BRANCH_NAME, PR_MARKER } from '../utils/constants'
 import * as logger from '../utils/logger'
 
@@ -24,7 +25,11 @@ export const syncRepo = async (
   const { owner, repo, repoFullName, files } = plan
 
   try {
-    const sourceContents = await readSourceFiles(files.map((f) => f.src))
+    const directoryDests = getDirectoryDestPaths(files)
+    const expandedFiles = await expandDirectoryMappings(files)
+    const hasDeleteEnabled = files.some((f) => f.delete === true)
+
+    const sourceContents = await readSourceFiles(expandedFiles.map((f) => f.src))
 
     const defaultBranch = await getDefaultBranch(octokit, owner, repo)
     const baseSha = await getBranchSha(octokit, owner, repo, defaultBranch)
@@ -36,11 +41,19 @@ export const syncRepo = async (
       octokit,
       owner,
       repo,
-      files.map((f) => f.dest),
+      expandedFiles.map((f) => f.dest),
       defaultBranch
     )
 
-    const changes = computeFileChanges(files, sourceContents, targetContents)
+    const fileChanges = computeFileChanges(expandedFiles, sourceContents, targetContents)
+
+    const orphanedChanges = hasDeleteEnabled
+      ? await detectOrphanedFiles(
+          octokit, owner, repo, expandedFiles, directoryDests, defaultBranch
+        )
+      : []
+
+    const changes = [...fileChanges, ...orphanedChanges]
 
     if (!hasChanges(changes)) {
       logger.info(`No changes needed for ${repoFullName}`)
@@ -63,10 +76,19 @@ export const syncRepo = async (
         octokit,
         owner,
         repo,
-        files.map((f) => f.dest),
+        expandedFiles.map((f) => f.dest),
         BRANCH_NAME
       )
-      const branchChanges = computeFileChanges(files, sourceContents, branchContents)
+      const branchFileChanges = computeFileChanges(expandedFiles, sourceContents, branchContents)
+
+      const branchOrphanedChanges = hasDeleteEnabled
+        ? await detectOrphanedFiles(
+            octokit, owner, repo, expandedFiles, directoryDests, BRANCH_NAME
+          )
+        : []
+
+      const branchChanges = [...branchFileChanges, ...branchOrphanedChanges]
+
       if (!hasChanges(branchChanges)) {
         logger.info(`Sync branch already up to date for ${repoFullName}`)
         return {
@@ -111,6 +133,30 @@ export const syncRepo = async (
     logger.error(`Failed to sync ${repoFullName}: ${message}`)
     return { repoFullName, status: 'error', changes: [], error: message }
   }
+}
+
+const detectOrphanedFiles = async (
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  expandedFiles: readonly RepoFileMapping[],
+  directoryDests: readonly string[],
+  ref: string
+): Promise<readonly FileChange[]> => {
+  const deleteEnabledDests = expandedFiles
+    .filter((f) => f.delete === true)
+    .map((f) => f.dest)
+  const sourceDests = new Set(deleteEnabledDests)
+
+  const targetPaths = (
+    await Promise.all(
+      directoryDests.map((dir) =>
+        listDirectoryFiles(octokit, owner, repo, dir, ref)
+      )
+    )
+  ).flat()
+
+  return computeOrphanedFiles(sourceDests, targetPaths, directoryDests)
 }
 
 const readSourceFiles = async (

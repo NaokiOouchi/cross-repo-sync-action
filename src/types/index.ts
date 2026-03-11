@@ -2,6 +2,7 @@ export interface FileMapping {
   readonly src: string
   readonly dest: string
   readonly repos: readonly string[]
+  readonly delete?: boolean
 }
 
 export interface SyncConfig {
@@ -11,6 +12,7 @@ export interface SyncConfig {
 export interface RepoFileMapping {
   readonly src: string
   readonly dest: string
+  readonly delete?: boolean
 }
 
 export interface RepoSyncPlan {
@@ -20,7 +22,7 @@ export interface RepoSyncPlan {
   readonly files: readonly RepoFileMapping[]
 }
 
-export type FileChangeStatus = 'created' | 'updated' | 'unchanged'
+export type FileChangeStatus = 'created' | 'updated' | 'unchanged' | 'deleted'
 
 export interface FileChange {
   readonly dest: string

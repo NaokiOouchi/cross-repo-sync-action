@@ -13,6 +13,7 @@ const fileMappingSchema = z.object({
         )
     )
     .min(1, 'repos must have at least one entry'),
+  delete: z.boolean().optional(),
 })
 
 const syncConfigSchema = z.object({

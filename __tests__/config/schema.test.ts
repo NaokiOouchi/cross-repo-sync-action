@@ -102,4 +102,66 @@ describe('syncConfigSchema', () => {
     const result = syncConfigSchema.parse(input)
     expect(result.sync).toHaveLength(2)
   })
+
+  it('should accept delete option as true', () => {
+    const input = {
+      sync: [
+        {
+          src: 'configs/',
+          dest: '.github/configs/',
+          repos: ['org/repo-a'],
+          delete: true,
+        },
+      ],
+    }
+
+    const result = syncConfigSchema.parse(input)
+    expect(result.sync[0].delete).toBe(true)
+  })
+
+  it('should accept delete option as false', () => {
+    const input = {
+      sync: [
+        {
+          src: 'configs/',
+          dest: '.github/configs/',
+          repos: ['org/repo-a'],
+          delete: false,
+        },
+      ],
+    }
+
+    const result = syncConfigSchema.parse(input)
+    expect(result.sync[0].delete).toBe(false)
+  })
+
+  it('should allow omitting delete option', () => {
+    const input = {
+      sync: [
+        {
+          src: 'file.md',
+          dest: 'dest.md',
+          repos: ['org/repo-a'],
+        },
+      ],
+    }
+
+    const result = syncConfigSchema.parse(input)
+    expect(result.sync[0].delete).toBeUndefined()
+  })
+
+  it('should reject non-boolean delete value', () => {
+    const input = {
+      sync: [
+        {
+          src: 'configs/',
+          dest: '.github/configs/',
+          repos: ['org/repo-a'],
+          delete: 'yes',
+        },
+      ],
+    }
+
+    expect(() => syncConfigSchema.parse(input)).toThrow()
+  })
 })

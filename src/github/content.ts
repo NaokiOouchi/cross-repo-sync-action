@@ -48,7 +48,9 @@ export const createTreeWithFiles = async (
       path: f.dest,
       mode: '100644' as const,
       type: 'blob' as const,
-      content: f.content,
+      ...(f.status === 'deleted'
+        ? { sha: null }
+        : { content: f.content }),
     }))
 
   const { data } = await octokit.git.createTree({
@@ -78,6 +80,56 @@ export const createCommit = async (
   })
 
   return data.sha
+}
+
+export const listDirectoryFiles = async (
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  dirPath: string,
+  ref: string
+): Promise<readonly string[]> => {
+  try {
+    return await listDirectoryFilesRecursively(octokit, owner, repo, dirPath, ref)
+  } catch (err: unknown) {
+    if (isNotFoundError(err)) {
+      return []
+    }
+    throw err
+  }
+}
+
+const listDirectoryFilesRecursively = async (
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  dirPath: string,
+  ref: string
+): Promise<readonly string[]> => {
+  const { data } = await octokit.repos.getContent({
+    owner,
+    repo,
+    path: dirPath,
+    ref,
+  })
+
+  if (!Array.isArray(data)) {
+    return [dirPath]
+  }
+
+  const results: string[] = []
+  for (const item of data) {
+    if (item.type === 'dir') {
+      const nested = await listDirectoryFilesRecursively(
+        octokit, owner, repo, item.path, ref
+      )
+      results.push(...nested)
+    } else {
+      results.push(item.path)
+    }
+  }
+
+  return results.sort()
 }
 
 const isNotFoundError = (err: unknown): boolean => {
